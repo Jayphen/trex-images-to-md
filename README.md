@@ -18,9 +18,9 @@ Add your key to the OPENAI_API_KEY environment variable in your shell.
 
 ## Todo
 
-- [ ] Configurable system message
+- [x] Configurable system message
 - [ ] Configurable dest directory
 - [ ] Cleanup when I learn how to write Go
-- [ ] Use goroutines for multiple files as input
+- [x] Use goroutines for multiple files as input
 - [ ] A binary release maybe
 - [ ] Embed image by adding path to the .md, move it along with the .md (configurable)
