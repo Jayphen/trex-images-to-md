@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 var sysPrompt string
@@ -144,15 +145,20 @@ func main() {
 	flag.Parse()
 
 	args := flag.Args()
+	wg := sync.WaitGroup{}
 
-	fmt.Println(sysPrompt)
-	fmt.Println(args)
-
-	if len(args) != 1 {
+	if len(args) < 1 {
 		log.Fatal("You must provide one or more files as input")
 	}
 
 	for _, file := range args {
-		processFile(file)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			processFile(file)
+		}()
+
 	}
+
+	wg.Wait()
 }
