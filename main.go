@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+var sysPrompt string
 
 type OpenAIResponse struct {
 	Choices []struct {
@@ -31,15 +34,20 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-func callOpenAI(prompt string, apiKey string) (string, error) {
+func callOpenAI(prompt string) (string, error) {
 	apiURL := "https://api.openai.com/v1/chat/completions"
+
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		log.Fatal("OPENAI_API_KEY not set")
+	}
 
 	data := OpenAIRequest{
 		Model: "gpt-4",
 		Messages: []Message{
 			{
 				Role:    "system",
-				Content: "You are a formatter, spellchecker and grammar checker. Format the provided text without changing the wording, except to correct mistakes. Return the result as markdown.",
+				Content: sysPrompt,
 			},
 			{
 				Role:    "user",
@@ -55,6 +63,7 @@ func callOpenAI(prompt string, apiKey string) (string, error) {
 
 	body := bytes.NewReader(payload)
 
+	log.Printf("🤖 Sending request to OpenAI API\n")
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", apiURL, body)
 	if err != nil {
@@ -88,10 +97,11 @@ func callOpenAI(prompt string, apiKey string) (string, error) {
 	return "", nil
 }
 
-func processFile(file string, apiKey string) {
+func processFile(file string) {
 	mdFilename := fmt.Sprintf("%s.md", strings.TrimSuffix(file, filepath.Ext(file)))
-
 	cmd := exec.Command("trex", "-i")
+
+	log.Printf("Reading file %s\n", file)
 	inputFile, err := os.Open(file)
 	if err != nil {
 		log.Fatal(err)
@@ -105,7 +115,7 @@ func processFile(file string, apiKey string) {
 		log.Fatal(err)
 	}
 
-	text, err := callOpenAI(string(output), apiKey)
+	text, err := callOpenAI(string(output))
 	if err != nil {
 		log.Printf("Error calling OpenAI API: %s\n", err)
 		return
@@ -129,17 +139,20 @@ func processFile(file string, apiKey string) {
 }
 
 func main() {
-	args := os.Args[1:]
+	flag.StringVar(&sysPrompt, "sysprompt", "You are a formatter, spellchecker and grammar checker. Format the provided text without changing the wording, except to correct mistakes. Return the result as markdown.", "Prompt to send to OpenAI")
+
+	flag.Parse()
+
+	args := flag.Args()
+
+	fmt.Println(sysPrompt)
+	fmt.Println(args)
+
 	if len(args) != 1 {
 		log.Fatal("You must provide one or more files as input")
 	}
 
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		log.Fatal("OPENAI_API_KEY not set")
-	}
-
 	for _, file := range args {
-		processFile(file, apiKey)
+		processFile(file)
 	}
 }
