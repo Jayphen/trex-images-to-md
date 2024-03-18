@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -16,7 +15,11 @@ import (
 	"sync"
 )
 
-var sysPrompt string
+var (
+	sysPrompt string
+	model     string
+	ocrMutex  sync.Mutex
+)
 
 type OpenAIResponse struct {
 	Choices []struct {
@@ -44,7 +47,7 @@ func callOpenAI(prompt string) (string, error) {
 	}
 
 	data := OpenAIRequest{
-		Model: "gpt-4",
+		Model: model,
 		Messages: []Message{
 			{
 				Role:    "system",
@@ -64,7 +67,7 @@ func callOpenAI(prompt string) (string, error) {
 
 	body := bytes.NewReader(payload)
 
-	log.Printf("🤖 Sending request to OpenAI API\n")
+	log.Printf("🤖 Sending request to OpenAI API with OCR'd text:\n%s\n", prompt)
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", apiURL, body)
 	if err != nil {
@@ -98,22 +101,55 @@ func callOpenAI(prompt string) (string, error) {
 	return "", nil
 }
 
-func processFile(file string) {
-	mdFilename := fmt.Sprintf("%s.md", strings.TrimSuffix(file, filepath.Ext(file)))
-	cmd := exec.Command("trex", "-i")
-
-	log.Printf("Reading file %s\n", file)
-	inputFile, err := os.Open(file)
+func openInputFile(filePath string) (*os.File, error) {
+	inputFile, err := os.Open(filePath)
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("error opening file %s: %w", filePath, err)
+	}
+
+	return inputFile, nil
+}
+
+func executeOCR(inputFile *os.File) ([]byte, error) {
+	ocrMutex.Lock()
+	defer ocrMutex.Unlock()
+	cmd := exec.Command("trex", "-i")
+	cmd.Stdin = inputFile
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("error executing OCR: %w", err)
+	}
+	return output, nil
+}
+
+func writeToMarkdownFile(mdFilename string, content []byte) error {
+	mdFile, err := os.Create(mdFilename)
+	if err != nil {
+		return fmt.Errorf("error creating markdown file %s: %w", mdFilename, err)
+	}
+	defer mdFile.Close()
+
+	if _, err := mdFile.Write(content); err != nil {
+		return fmt.Errorf("error writing markdown file %s: %w", mdFilename, err)
+	}
+
+	return nil
+}
+
+func processFile(file string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	inputFile, err := openInputFile(file)
+	if err != nil {
+		log.Println(err)
+		return
 	}
 	defer inputFile.Close()
 
-	cmd.Stdin = inputFile
-
-	output, err := cmd.Output()
+	output, err := executeOCR(inputFile)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return
 	}
 
 	text, err := callOpenAI(string(output))
@@ -122,18 +158,10 @@ func processFile(file string) {
 		return
 	}
 
-	mdFile, err := os.Create(mdFilename)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer mdFile.Close()
-
-	writer := bufio.NewWriter(mdFile)
-	defer writer.Flush()
-
-	_, err = writer.WriteString(text)
-	if err != nil {
-		log.Fatal(err)
+	mdFilename := fmt.Sprintf("%s.md", strings.TrimSuffix(file, filepath.Ext(file)))
+	if err := writeToMarkdownFile(mdFilename, []byte(text)); err != nil {
+		log.Println(err)
+		return
 	}
 
 	fmt.Printf("Created %s from %s\n", mdFilename, file)
@@ -141,11 +169,11 @@ func processFile(file string) {
 
 func main() {
 	flag.StringVar(&sysPrompt, "sysprompt", "You are a formatter, spellchecker and grammar checker. Format the provided text without changing the wording, except to correct mistakes. Return the result as markdown.", "Prompt to send to OpenAI")
-
+	flag.StringVar(&model, "model", "gpt-4", "Which GPT model to use. Recommended: 'gpt-4', 'gpt-3.5-turbo'")
 	flag.Parse()
 
 	args := flag.Args()
-	wg := sync.WaitGroup{}
+	var wg sync.WaitGroup
 
 	if len(args) < 1 {
 		log.Fatal("You must provide one or more files as input")
@@ -153,11 +181,7 @@ func main() {
 
 	for _, file := range args {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			processFile(file)
-		}()
-
+		go processFile(file, &wg)
 	}
 
 	wg.Wait()
